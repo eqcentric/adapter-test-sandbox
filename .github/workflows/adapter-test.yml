@@ -101,7 +101,7 @@ jobs:
           export MONGO_SANDBOX_DSN=${{ secrets.MONGO_SANDBOX_DSN }}
           export MONGO_SANDBOX_USERNAME=${{ secrets.MONGO_SANDBOX_USERNAME }}
           export MONGO_SANDBOX_PASSWORD=${{ secrets.MONGO_SANDBOX_PASSWORD }}
-          docker build --build-arg GIT_PRIVATE_TOKEN --file ./Dockerfile --tag adapter .
+          docker build --build-arg GIT_PRIVATE_TOKEN --build-arg MONGO_DATABASE --build-arg MONGO_SANDBOX_DSN --build-arg MONGO_SANDBOX_USERNAME --build-arg MONGO_SANDBOX_PASSWORD --file ./Dockerfile --tag adapter .
 
       - name: Launch container
         if: '!inputs.adapter-image'
