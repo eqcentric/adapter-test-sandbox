@@ -1,0 +1,127 @@
+name: Test adapter
+
+on:
+  workflow_call:
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        description: 'AWS Access Key ID'
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        description: 'AWS Secret Access Key'
+        required: true
+      ADAPTER_CREDENTIALS:
+        description: 'Adapter credentials in JSON format'
+        required: true
+      GIT_PRIVATE_TOKEN:
+        description: 'github token to install makini vendor'
+        required: true
+      MONGO_DATABASE:
+        description: 'mongo database'
+        required: true
+      MONGO_SANDBOX_DSN:
+        description: 'mongo dns'
+        required: true
+      MONGO_SANDBOX_USERNAME:
+        description: 'mongodb username'
+        required: true
+      MONGO_SANDBOX_PASSWORD:
+        description: 'mongodb password'
+        required: true
+    inputs:
+      aws-region:
+        type: string
+        description: 'AWS Region, e.g. us-east-2'
+        required: true
+      adapter-image:
+        type: string
+        description: 'Adapter image to pull for testing'
+        required: false
+      test-image:
+        type: string
+        description: 'Image to use for testing'
+        required: true
+      test-options:
+        type: string
+        description: 'Jest CLI arguments'
+        required: false
+      env-file:
+        type: string
+        description: '.env file contents'
+        required: false
+
+jobs:
+  integration-test:
+    runs-on: [self-hosted]
+    steps:
+      - name: Checkout code
+        if: '!inputs.adapter-image'
+        uses: actions/checkout@v2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Docker pull adapter image
+        if: 'inputs.adapter-image'
+        run: docker pull ${{ inputs.adapter-image }}
+
+      - name: Docker pull testing image
+        run: docker pull ${{ inputs.test-image }}
+
+      - name: Pull mongodb
+        run: docker pull mongo
+
+      - name: create a network
+        run: docker network create --driver=bridge --subnet=192.168.10.0/24 --gateway=192.168.10.1 adapter-test-net
+
+      - name: Create env file
+        run: |
+          cat > .env << EOF
+            ADAPTER_CREDENTIALS=${{ secrets.ADAPTER_CREDENTIALS }}
+            ADAPTER_URL=http://adapter:80
+            API_URL=http://test:3000
+            MONGO_DSN=mongodb://mongo:27017
+            ${{ inputs.env-file }}
+          EOF
+      - name: View env
+        run : cat .env
+
+      - name : Build image
+        if: '!inputs.adapter-image'
+        run: |
+          export GIT_PRIVATE_TOKEN=${{ secrets.GIT_PRIVATE_TOKEN }}
+          export MONGO_DATABASE=${{ secrets.MONGO_DATABASE }}
+          export MONGO_SANDBOX_DSN=${{ secrets.MONGO_SANDBOX_DSN }}
+          export MONGO_SANDBOX_USERNAME=${{ secrets.MONGO_SANDBOX_USERNAME }}
+          export MONGO_SANDBOX_PASSWORD=${{ secrets.MONGO_SANDBOX_PASSWORD }}
+          docker build --build-arg GIT_PRIVATE_TOKEN --file ./Dockerfile --tag adapter .
+
+      - name: Launch container
+        if: '!inputs.adapter-image'
+        run: docker run -d --name=adapter --hostname=adapter --net=adapter-test-net --env-file .env adapter
+
+      - name: Launch container
+        if: 'inputs.adapter-image'
+        run: docker run -d --name=adapter --hostname=adapter --net=adapter-test-net --env-file .env ${{ inputs.adapter-image }}
+
+      - name: run mongodb
+        run: docker run -d --hostname=mongo --net=adapter-test-net -t mongo
+
+      - name: Run testing with testing image
+        shell: bash {0}
+        run: |
+          docker run --name=test --hostname=test --net=adapter-test-net --env-file .env -t ${{ inputs.test-image }} {{ inputs.test-options }}
+          status=$?
+          if test $status -eq 1
+          then
+            echo '--- Container logs ---'
+            docker logs adapter
+            exit 1
+          fi
